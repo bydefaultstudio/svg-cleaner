@@ -1,0 +1,29 @@
+{
+  "name": "@bydefaultstudio/svg-cleaner",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Clean and prepare SVGs for inline use, icon systems, standalone files and CSS — one engine for CLI and browser.",
+  "main": "src/core.js",
+  "bin": {
+    "svg-cleaner": "bin/svg-cleaner.js"
+  },
+  "files": [
+    "src",
+    "bin",
+    "README.md",
+    "DESIGN.md",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "test": "node test/check.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bydefaultstudio/svg-cleaner.git"
+  },
+  "author": "By Default Studio",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=18"
+  }
+}
