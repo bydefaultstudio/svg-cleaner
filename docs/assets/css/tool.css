@@ -1,0 +1,49 @@
+/* ------ SVG CLEANER TOOL STYLES ------ */
+/* Page-specific overrides on top of design-system.css — keep tiny. */
+
+/* -- Disabled toggle state -- */
+.form-toggle.is-disabled {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+/* -- Textareas -- */
+#svg-input,
+#svg-output {
+  font-family: var(--font-quaternary);
+  font-size: var(--font-s);
+  min-height: 200px;
+  resize: vertical;
+}
+
+/* -- Sanitise / status notice -- */
+.tool-status {
+  font-size: var(--font-s);
+  color: var(--text-faded);
+  min-height: 1.5em;
+}
+
+/* -- Wrapper settings -- */
+.tool-settings summary {
+  cursor: pointer;
+  font-size: var(--font-s);
+}
+
+.tool-settings-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--space-s) var(--space-m);
+  align-items: center;
+  margin-top: var(--space-m);
+  max-width: 28rem;
+}
+
+.tool-settings-grid label {
+  font-size: var(--font-s);
+}
+
+/* -- Footer -- */
+.tool-footer {
+  font-size: var(--font-s);
+  color: var(--text-faded);
+}

@@ -85,6 +85,14 @@ Inputs over 2MB are refused — this tool targets hand-authored SVGs, not large 
 
 Process one SVG at a time: the cleaner treats the whole paste as a single SVG document (nested `<svg>` viewports inside it are preserved; two separate SVGs in one paste are not supported).
 
+## Web tool
+
+`docs/` is the public-facing tool — a fully static page, no build step. It works straight from disk (open `docs/index.html`), and when the repo goes public it deploys with GitHub Pages: **Settings → Pages → Deploy from a branch → `main` / `docs`**. Same layout as the original: pick a mode, paste, copy. Additions: a visible Sanitise toggle with a status line reporting what was removed, and wrapper settings saved per-browser. The CSP ships in the page as a meta tag since Pages can't send headers.
+
+Two vendored files live in `docs/assets`, neither hand-edited:
+- `js/svg-cleaner-core.js` — synced from `src/core.js` on `npm install`; `npm test` fails if it drifts
+- `css/design-system.css` — a copy of the By Default design system (engine defaults, system fonts); re-copy manually on design-system upgrades
+
 ## Development
 
 ```bash

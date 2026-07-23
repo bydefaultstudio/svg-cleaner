@@ -22,7 +22,7 @@
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  var VERSION = '1.0.0';
+  var VERSION = '1.1.0';
 
   // Refuse pathological inputs — protects the caller's own process/tab
   var MAX_INPUT_BYTES = 2 * 1024 * 1024;

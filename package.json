@@ -1,6 +1,6 @@
 {
   "name": "@bydefaultstudio/svg-cleaner",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "description": "Clean and prepare SVGs for inline use, icon systems, standalone files and CSS — one engine for CLI and browser.",
   "main": "src/core.js",
@@ -15,7 +15,8 @@
     "CHANGELOG.md"
   ],
   "scripts": {
-    "test": "node test/check.js"
+    "test": "node test/check.js",
+    "prepare": "cp src/core.js docs/assets/js/svg-cleaner-core.js"
   },
   "repository": {
     "type": "git",

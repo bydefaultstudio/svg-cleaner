@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <!-- GitHub Pages can't send headers, so the CSP ships in the page itself
+       (frame-ancestors isn't meta-supported; everything else is enforced) -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; base-uri 'none'; form-action 'none'">
+  <title>SVG Cleaner — clean, optimised SVG output</title>
+  <meta name="description" content="Paste your SVG code, get clean optimised output — inline, icon, logo, image file or CSS. Runs entirely in your browser; nothing is uploaded.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🧼</text></svg>">
+  <link rel="stylesheet" href="assets/css/design-system.css">
+  <link rel="stylesheet" href="assets/css/tool.css">
+</head>
+<body>
+  <div class="page-wrapper">
+    <main class="page-content">
+
+      <section class="top-medium bottom-large">
+        <div class="padding-global">
+          <div class="container-m">
+            <div class="block gap-l">
+
+              <header class="block gap-s">
+                <h1>SVG Cleaner</h1>
+                <p data-text-wrap="pretty">Paste your SVG code, get clean optimised output.</p>
+                <p class="tool-status">Runs entirely in your browser — your SVG never leaves this page.</p>
+              </header>
+
+              <!-- Output mode -->
+              <div class="block gap-s">
+                <label class="text-size-small">Output as</label>
+                <div class="segmented-control" id="mode-selector">
+                  <button type="button" class="segmented-control-btn" data-mode="icon">Icon</button>
+                  <button type="button" class="segmented-control-btn" data-mode="logo">Logo</button>
+                  <button type="button" class="segmented-control-btn" data-mode="image">Image</button>
+                  <button type="button" class="segmented-control-btn" data-mode="css">CSS</button>
+                </div>
+              </div>
+
+              <!-- Output Options -->
+              <div class="block gap-s">
+                <label class="text-size-small">Output Options</label>
+                <div class="block row gap-m" style="flex-wrap: wrap;">
+                  <div class="form-toggle" id="toggle-sanitise">
+                    <input type="checkbox" id="opt-sanitise" checked>
+                    <label for="opt-sanitise">Sanitise</label>
+                  </div>
+                  <div class="form-toggle" id="toggle-size">
+                    <input type="checkbox" id="opt-size">
+                    <label for="opt-size">Size 100%</label>
+                  </div>
+                  <div class="form-toggle" id="toggle-color">
+                    <input type="checkbox" id="opt-current-color" checked>
+                    <label for="opt-current-color">currentColor</label>
+                  </div>
+                  <div class="form-toggle" id="toggle-minify">
+                    <input type="checkbox" id="opt-minify">
+                    <label for="opt-minify">Minify</label>
+                  </div>
+                  <div class="form-toggle" id="toggle-strip-comments">
+                    <input type="checkbox" id="opt-strip-comments" checked>
+                    <label for="opt-strip-comments">Strip Comments</label>
+                  </div>
+                  <div class="form-toggle" id="toggle-strip-metadata">
+                    <input type="checkbox" id="opt-strip-metadata">
+                    <label for="opt-strip-metadata">Strip Metadata</label>
+                  </div>
+                  <div class="form-toggle" id="toggle-round-decimals">
+                    <input type="checkbox" id="opt-round-decimals">
+                    <label for="opt-round-decimals">Round Decimals</label>
+                  </div>
+                </div>
+              </div>
+
+              <!-- CSS format radios (shown when CSS selected) -->
+              <div id="ctx-css" class="block row gap-m" style="display: none; flex-wrap: wrap;">
+                <div class="form-check">
+                  <input type="radio" id="css-url" name="css-format" value="url" checked>
+                  <label for="css-url">URL wrapper</label>
+                </div>
+                <div class="form-check">
+                  <input type="radio" id="css-basic" name="css-format" value="basic">
+                  <label for="css-basic">Basic background-image</label>
+                </div>
+                <div class="form-check">
+                  <input type="radio" id="css-advanced" name="css-format" value="advanced">
+                  <label for="css-advanced">Advanced background-image</label>
+                </div>
+                <div class="form-check">
+                  <input type="radio" id="css-bullets" name="css-format" value="bullets">
+                  <label for="css-bullets">CSS bullets</label>
+                </div>
+                <div class="form-check">
+                  <input type="radio" id="css-class" name="css-format" value="class">
+                  <label for="css-class">Inside class</label>
+                </div>
+              </div>
+
+              <!-- Mode name inputs (shown when Icon/Logo/Image selected) -->
+              <input type="text" id="opt-icon-name" placeholder="Icon name (e.g. arrow-right)" style="display: none;">
+              <input type="text" id="opt-logo-name" placeholder="Logo name (e.g. brand)" style="display: none;">
+              <input type="text" id="opt-image-filename" placeholder="Filename (e.g. logo-brand)" style="display: none;">
+
+              <!-- Input -->
+              <div class="block gap-s">
+                <label for="svg-input">Paste SVG Code</label>
+                <textarea id="svg-input" placeholder="<svg viewBox=&quot;0 0 24 24&quot;>&#10;  <path d=&quot;M12 2...&quot; fill=&quot;#000&quot;/>&#10;</svg>"></textarea>
+              </div>
+
+              <!-- Save Image (only visible in Image mode) -->
+              <div id="save-group" style="display: none;">
+                <button class="button" id="save-btn">Save Image</button>
+              </div>
+
+              <!-- Output -->
+              <div id="output-group" class="block gap-s">
+                <label for="svg-output">Output</label>
+                <textarea id="svg-output" readonly placeholder="Cleaned SVG will appear here..."></textarea>
+              </div>
+
+              <!-- Status: visible in every mode so sanitising is never silent -->
+              <p class="tool-status" id="tool-status" role="status" aria-live="polite"></p>
+
+              <!-- Copy Button -->
+              <div id="copy-group">
+                <button class="button" data-variant="outline" id="copy-btn" disabled>Copy</button>
+              </div>
+
+              <!-- Wrapper settings -->
+              <details class="tool-settings">
+                <summary>Wrapper settings</summary>
+                <div class="tool-settings-grid">
+                  <label for="set-icon-class">Icon class</label>
+                  <input type="text" id="set-icon-class">
+                  <label for="set-icon-attr">Icon attribute</label>
+                  <input type="text" id="set-icon-attr">
+                  <label for="set-logo-class">Logo class</label>
+                  <input type="text" id="set-logo-class">
+                  <label for="set-logo-attr">Logo attribute</label>
+                  <input type="text" id="set-logo-attr">
+                </div>
+                <p class="tool-status">Saved in this browser. Defaults: svg-icn / data-icon / svg-logo / data-logo.</p>
+              </details>
+
+              <footer class="tool-footer">
+                <p>&copy; 2026 By Default</p>
+              </footer>
+
+            </div>
+          </div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <script src="assets/js/svg-cleaner-core.js" defer></script>
+  <script src="assets/js/app.js" defer></script>
+</body>
+</html>

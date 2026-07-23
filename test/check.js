@@ -200,4 +200,16 @@ try {
 }
 assert(failed, 'CLI rejects combined modes');
 
+//
+//------- Web tool -------//
+//
+
+// the vendored browser engine must be in lockstep with src/core.js
+// (GitHub Pages serves the committed copy — there is no build step to sync it)
+assert.strictEqual(
+  fs.readFileSync(path.join(__dirname, '..', 'docs', 'assets', 'js', 'svg-cleaner-core.js'), 'utf8'),
+  fs.readFileSync(path.join(__dirname, '..', 'src', 'core.js'), 'utf8'),
+  'docs/assets/js/svg-cleaner-core.js is out of sync with src/core.js — run npm install'
+);
+
 console.log('All checks passed.');
