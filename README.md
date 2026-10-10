@@ -74,12 +74,12 @@ The API surface is `processSVG(svg, options)`, `sanitiseSVG(svg)`, `sanitiseRepo
 
 ## Security
 
-- **Sanitising is on by default.** The sanitise pass removes script execution vectors: `<script>` blocks, `on*` event handler attributes, `javascript:` and `data:text/html` links, and `<foreignObject>`. Declarative animation — CSS keyframes in `<style>`, SMIL `<animate>` elements — is untouched.
+- **Sanitising is on by default.** The sanitise pass removes script execution vectors: `<script>` blocks, `on*` event handler attributes (quoted or not), `javascript:` and `data:text/html` URLs in any attribute (entity-encoded or not), `<foreignObject>`, and any element that is not SVG. Declarative animation — CSS keyframes in `<style>`, SMIL `<animate>` elements — is untouched.
 - **Nothing is removed silently.** The CLI reports what sanitising removed on stderr; `sanitiseReport()` gives UIs the same information. Disable with `--no-sanitise` only for trusted, deliberately scripted SVGs.
 - **Everything runs locally.** The CLI processes stdin on your machine; the browser build processes in-page. No network, no uploads, no storage.
 - **Zero dependencies**, and it stays that way — there is no supply chain to compromise.
 - **Untrusted SVG must never be rendered live.** UIs built on this package keep input/output in inert text fields and preview only via `<img>`/blob URLs, where the browser guarantees scripts cannot run.
-- **Known limit:** the engine is regex-based, not a full XML parser (see DESIGN.md). It is built for the "designer pastes an SVG" workflow — do not use the sanitise pass as the only defence when embedding SVG from genuinely hostile sources.
+- **Known limit:** the sanitise pass tokenises tags the way a browser does and writes them back in a form HTML and XML parsers agree on, but it is not a full XML parser (see DESIGN.md). Do not use it as the only defence when embedding SVG from genuinely hostile sources.
 
 Inputs over 2MB are refused — this tool targets hand-authored SVGs, not large exports.
 

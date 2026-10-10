@@ -53,21 +53,38 @@ vector downstream. Hence:
 - `--no-sanitise` exists because deliberately scripted SVGs are legitimate;
   the flag is an informed opt-out, not a hidden default.
 
-## Regex, not a parser
+## Regex for cleaning, a tokenizer for sanitising
 
-The engine transforms text with regular expressions. This is a deliberate
-trade-off: zero dependencies, no build, runs anywhere, and the input domain is
-"an SVG a designer just exported", not adversarial markup. The known costs:
+The cleaning passes transform text with regular expressions. This is a
+deliberate trade-off: zero dependencies, no build, runs anywhere, and the
+input domain is "an SVG a designer just exported". Pathological or deeply
+malformed SVG can confuse them, and the 2MB input cap bounds their worst-case
+time.
 
-- Pathological or deeply malformed SVG can confuse the transforms.
-- The sanitise pass is a best-effort defence, not a guarantee — anything
-  security-critical must also rely on browser-enforced boundaries (render
-  untrusted SVG only in `<img>`/blob contexts, where scripts cannot run).
-- The 2MB input cap bounds worst-case regex time.
+The sanitise pass is the exception, since 1.2.0. A regex over the whole string
+missed unquoted handlers (`<svg onload=...>`), `/` used as an attribute
+separator, entity-encoded schemes and SMIL `<set to="javascript:...">`. It now
+reads tags one at a time with HTML's tokenizer rules and:
 
-If the tool ever needs to handle untrusted input at scale, the upgrade path is
-swapping the engine's internals for a real parser behind the same
-`processSVG()` API — the wrappers and tests stay.
+- keeps only SVG elements, so HTML that breaks out of SVG parsing in a page
+  (`<img>`, `<p>`, `<font>`) cannot survive, and `<script>` and
+  `<foreignObject>` go with their content, prefixed or not;
+- drops every `on*` attribute, and any value that decodes to a script URL
+  (`javascript:`, `vbscript:`, `data:text/html`), anywhere in the value;
+- drops XHTML namespace declarations, DOCTYPE internal subsets and
+  processing instructions other than the leading XML declaration;
+- writes every kept tag back in one canonical form: quoted values, `<` and
+  `>` escaped inside them, comments and CDATA neutralised. An HTML page and
+  an XML `.svg` file then read the output the same way, so an attribute value
+  or a comment cannot hide a tag from one parser and show it to the other.
+
+A clean export comes back byte for byte, apart from a valueless attribute
+gaining `=""`.
+
+It is still not a full XML parser, so it is one layer of defence, not the
+only one: anything security-critical must also rely on browser-enforced
+boundaries (render untrusted SVG only in `<img>`/blob contexts, where scripts
+cannot run).
 
 ## UI rules (for any surface built on this)
 

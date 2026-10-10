@@ -2,15 +2,17 @@
  * Script Purpose: SVG Cleaner core — shared processing engine for CLI and browser
  * Author: By Default Studio
  * Created: 2026-07-23
- * Version: 1.0.0
+ * Version: 1.2.0
  *
  * Single source of truth for SVG cleaning. Consumed by:
  *   - bin/svg-cleaner.js (Node CLI, via require)
  *   - web/index.html and any browser UI (via <script>, exposes window.SvgCleaner)
  *
- * Regex-based by design: fast, dependency-free, and adequate for the trusted
- * "designer pastes an SVG" workflow. It is not a full XML parser — do not rely
- * on it as the only defence against hostile SVG in a security-critical context.
+ * Dependency-free. The cleaning passes are regex-based, which suits the
+ * trusted "designer pastes an SVG" workflow. The sanitise pass is not: it
+ * tokenises tags the way a browser does and keeps only SVG elements (see
+ * "Sanitise" below). It is still not a full XML parser, so treat it as one
+ * layer of defence, not the only one, for SVG from hostile sources.
  */
 
 (function (root, factory) {
@@ -22,7 +24,7 @@
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  var VERSION = '1.1.0';
+  var VERSION = '1.2.0';
 
   // Refuse pathological inputs — protects the caller's own process/tab
   var MAX_INPUT_BYTES = 2 * 1024 * 1024;
@@ -99,45 +101,318 @@
   //------- Sanitise (security pass) -------//
   //
 
-  // Patterns removed by the sanitise pass. Each entry: [label, regex, ...]
-  // Exposed so callers (CLI/web) can warn about what will be removed.
-  var SANITISE_PATTERNS = [
-    { label: 'script blocks', regexes: [/<script[\s\S]*?<\/script\s*>/gi, /<script[^>]*\/>/gi] },
-    { label: 'foreignObject blocks', regexes: [/<foreignObject[\s\S]*?<\/foreignObject\s*>/gi, /<foreignObject[^>]*\/>/gi] },
-    { label: 'event handler attributes', regexes: [/\s+on[a-z]+\s*=\s*"[^"]*"/gi, /\s+on[a-z]+\s*=\s*'[^']*'/gi] },
-    {
-      label: 'javascript/data-html links',
-      regexes: [
-        /\s+(?:xlink:)?href\s*=\s*"\s*(?:javascript:|data:\s*text\/html)[^"]*"/gi,
-        /\s+(?:xlink:)?href\s*=\s*'\s*(?:javascript:|data:\s*text\/html)[^']*'/gi,
-      ],
-    },
+  // The sanitise pass reads markup the way a browser does: one tag at a time,
+  // attributes split on HTML's rules (quoted, unquoted, valueless, "/" as a
+  // separator), never a regex over the whole string. Every tag it keeps is
+  // written back in one canonical form: double or single quotes round every
+  // value, "<" and ">" escaped inside values, comments and CDATA neutralised.
+  // That is what makes the output safe in both places it ends up. An HTML page
+  // and an XML .svg file can only disagree about input that is not written
+  // like this, so an attribute value or a comment cannot hide a tag from one
+  // parser and show it to the other.
+
+  // Labels reported for each kind of removal, in report order.
+  var SANITISE_LABELS = [
+    'script blocks',
+    'foreignObject blocks',
+    'non-SVG elements',
+    'event handler attributes',
+    'javascript/data-html links',
+    'XHTML namespace declarations',
+    'DOCTYPE entity declarations and processing instructions',
+    'malformed attributes',
   ];
 
-  // Strip Active Content (scripts, event handlers, javascript: links, foreignObject)
-  // Leaves <style>, CSS keyframes, and SMIL <animate> elements untouched —
-  // declarative animation survives; only script execution vectors are removed.
-  function sanitiseSVG(svg) {
-    var result = svg;
-    SANITISE_PATTERNS.forEach(function (pattern) {
-      pattern.regexes.forEach(function (re) {
-        result = result.replace(re, '');
-      });
-    });
-    return result;
+  function toSet(list) {
+    var set = {};
+    list.forEach(function (name) { set[name] = true; });
+    return set;
   }
 
-  // Report Which Sanitise Patterns Match (for caller warnings — does not modify)
-  function sanitiseReport(svg) {
-    var matched = [];
-    SANITISE_PATTERNS.forEach(function (pattern) {
-      var hits = pattern.regexes.some(function (re) {
-        re.lastIndex = 0;
-        return re.test(svg);
-      });
-      if (hits) matched.push(pattern.label);
+  // Elements an SVG editor exports. Anything else is dropped with its content.
+  // HTML names are absent on purpose: in a page, an <img>, <p> or <font> inside
+  // <svg> breaks out of SVG parsing into live HTML. Stored lowercase.
+  var SVG_ELEMENTS = toSet([
+    'a', 'altglyph', 'altglyphdef', 'altglyphitem', 'animate', 'animatecolor',
+    'animatemotion', 'animatetransform', 'circle', 'clippath', 'color-profile',
+    'cursor', 'defs', 'desc', 'discard', 'ellipse', 'feblend', 'fecolormatrix',
+    'fecomponenttransfer', 'fecomposite', 'feconvolvematrix', 'fediffuselighting',
+    'fedisplacementmap', 'fedistantlight', 'fedropshadow', 'feflood', 'fefunca',
+    'fefuncb', 'fefuncg', 'fefuncr', 'fegaussianblur', 'feimage', 'femerge',
+    'femergenode', 'femorphology', 'feoffset', 'fepointlight',
+    'fespecularlighting', 'fespotlight', 'fetile', 'feturbulence', 'filter',
+    'font-face', 'font-face-format', 'font-face-name', 'font-face-src',
+    'font-face-uri', 'g', 'glyph', 'glyphref', 'hatch', 'hatchpath', 'hkern',
+    'image', 'line', 'lineargradient', 'marker', 'mask', 'mesh', 'meshgradient',
+    'meshpatch', 'meshrow', 'metadata', 'missing-glyph', 'mpath', 'path',
+    'pattern', 'polygon', 'polyline', 'radialgradient', 'rect', 'set',
+    'solidcolor', 'stop', 'style', 'svg', 'switch', 'symbol', 'text', 'textpath',
+    'title', 'tref', 'tspan', 'use', 'view', 'vkern',
+  ]);
+
+  // Matched on the local name, so a prefixed <svg:script> goes too.
+  var SCRIPT_ELEMENTS = toSet(['script', 'handler', 'listener']);
+
+  // Enough named entities to unmask a hidden scheme ("java&Tab;script&colon;").
+  // Lookup is case-insensitive: this only feeds detection, never output.
+  var NAMED_ENTITIES = {
+    amp: '&', apos: "'", colon: ':', comma: ',', gt: '>', lpar: '(', lt: '<',
+    nbsp: '\u00a0', newline: '\n', period: '.', quot: '"', rpar: ')', semi: ';',
+    sol: '/', tab: '\t',
+  };
+
+  function decodeEntities(value) {
+    return value.replace(/&(?:#x([0-9a-f]+)|#([0-9]+)|([a-z][a-z0-9]*));?/gi, function (match, hex, dec, name) {
+      if (hex || dec) {
+        var code = parseInt(hex || dec, hex ? 16 : 10);
+        return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : '';
+      }
+      var named = NAMED_ENTITIES[name.toLowerCase()];
+      return named === undefined ? match : named;
     });
-    return matched;
+  }
+
+  // Strip what a URL parser ignores (whitespace, control and invisible
+  // characters) so "java\tscript:" and "&#x6A;avascript:" read as written.
+  function normaliseValue(value) {
+    return decodeEntities(value)
+      .replace(/[\u0000-\u0020\u007f-\u00a0\u00ad\u1680\u180e\u2000-\u200f\u2028\u2029\u205f\u3000\ufeff]/g, '')
+      .toLowerCase();
+  }
+
+  // Anywhere in the value, not only at the start: SMIL's values="a;b;c" lists
+  // several URLs, and <set to="javascript:..."> animates a link into one.
+  var SCRIPT_URL = /(?:java|vb)script:|data:text\/html|data:(?:text|application)\/(?:x-)?(?:java|ecma)script/;
+
+  var ATTR_NAME = /^[a-z_][a-z0-9_.:-]*$/i;
+  var ELEMENT_NAME = /^[a-z_][a-z0-9_.-]*(?::[a-z_][a-z0-9_.-]*)?$/i;
+  var WHITESPACE = /[\t\n\f\r ]/;
+
+  // Read one start or end tag at `start` (the "<") using HTML's tokenizer
+  // rules. Returns null when the input ends inside the tag.
+  function readTag(svg, start) {
+    var n = svg.length;
+    var j = start + 1;
+    var isEnd = svg.charAt(j) === '/';
+    if (isEnd) j++;
+
+    var nameStart = j;
+    while (j < n && !WHITESPACE.test(svg.charAt(j)) && svg.charAt(j) !== '/' && svg.charAt(j) !== '>') j++;
+    var tag = { isEnd: isEnd, name: svg.slice(nameStart, j), attrs: [], selfClosing: false, tail: '', end: -1 };
+
+    var sep = '';
+    while (j < n) {
+      var c = svg.charAt(j);
+      if (WHITESPACE.test(c)) { sep += c; j++; continue; }
+      if (c === '/') {
+        if (svg.charAt(j + 1) === '>') { tag.selfClosing = true; tag.tail = sep; tag.end = j + 2; return tag; }
+        sep += ' '; j++; continue; // a stray "/" separates attributes in HTML
+      }
+      if (c === '>') { tag.tail = sep; tag.end = j + 1; return tag; }
+
+      // Attribute name: an "=" can open it (HTML keeps it as part of the name)
+      var attrStart = j;
+      j++;
+      while (j < n && !WHITESPACE.test(svg.charAt(j)) && '/>='.indexOf(svg.charAt(j)) === -1) j++;
+      var attr = { sep: sep, name: svg.slice(attrStart, j), value: '', quote: null, hasValue: false };
+      sep = '';
+
+      var k = j;
+      while (k < n && WHITESPACE.test(svg.charAt(k))) k++;
+      if (svg.charAt(k) === '=') {
+        k++;
+        while (k < n && WHITESPACE.test(svg.charAt(k))) k++;
+        var q = svg.charAt(k);
+        attr.hasValue = true;
+        if (q === '"' || q === "'") {
+          var close = svg.indexOf(q, k + 1);
+          if (close === -1) return null;
+          attr.quote = q;
+          attr.value = svg.slice(k + 1, close);
+          j = close + 1;
+        } else {
+          var vStart = k;
+          while (k < n && !WHITESPACE.test(svg.charAt(k)) && svg.charAt(k) !== '>') k++;
+          attr.value = svg.slice(vStart, k);
+          j = k;
+        }
+      }
+      tag.attrs.push(attr);
+    }
+    return null;
+  }
+
+  // Write an attribute back in canonical form: always quoted, and no "<" or
+  // ">" left in the value for an HTML raw-text element to end early on.
+  function writeAttr(attr) {
+    var sep = attr.sep === '' ? ' ' : attr.sep;
+    if (!attr.hasValue) return sep + attr.name + '=""';
+    var quote = attr.quote || '"';
+    var value = attr.value.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    if (quote === '"') value = value.replace(/"/g, '&quot;');
+    return sep + attr.name + '=' + quote + value + quote;
+  }
+
+  // A comment both parsers agree on: no "--", no "<" or ">", and no leading
+  // ">" or trailing "-" for HTML's "<!-->" and "--->" shortcuts to bite on.
+  function writeComment(body) {
+    var safe = body.replace(/[<>]/g, ' ').replace(/-(?=-)/g, '- ');
+    if (safe.charAt(safe.length - 1) === '-') safe += ' ';
+    return '<!--' + safe + '-->';
+  }
+
+  // Filter one kept element's attributes, flagging what goes.
+  function cleanAttrs(localName, attrs, flag) {
+    return attrs.filter(function (attr) {
+      if (!ATTR_NAME.test(attr.name)) { flag(7); return false; }
+      var lower = attr.name.toLowerCase();
+      var local = lower.slice(lower.lastIndexOf(':') + 1);
+      if (local.indexOf('on') === 0) { flag(3); return false; }
+
+      var value = normaliseValue(attr.value);
+      if ((lower === 'xmlns' || lower.indexOf('xmlns:') === 0)
+        && (value.indexOf('1999/xhtml') !== -1 || value.indexOf('1998/math/mathml') !== -1)) {
+        flag(5); return false;
+      }
+      if (SCRIPT_URL.test(value)) { flag(4); return false; }
+      // <use> pulls a whole document in; a data: one has carried script before
+      if (localName === 'use' && local === 'href' && value.indexOf('data:') === 0) { flag(4); return false; }
+      return true;
+    });
+  }
+
+  // Run the sanitise pass. Returns the cleaned markup and the labels of what
+  // it removed, so sanitiseSVG and sanitiseReport cannot drift apart.
+  function runSanitise(svg) {
+    var found = [];
+    function flag(index) { found[index] = true; }
+
+    var out = '';
+    var n = svg.length;
+    var i = 0;
+    var skipName = null; // lowercase name of an element being dropped whole
+    var skipDepth = 0;
+
+    function emit(text) { if (skipName === null) out += text; }
+
+    while (i < n) {
+      var lt = svg.indexOf('<', i);
+      if (lt === -1) { emit(svg.slice(i)); break; }
+      emit(svg.slice(i, lt));
+      i = lt;
+
+      // Comment
+      if (svg.substr(i, 4) === '<!--') {
+        var cEnd = svg.indexOf('-->', i + 4);
+        emit(writeComment(svg.slice(i + 4, cEnd === -1 ? n : cEnd)));
+        i = cEnd === -1 ? n : cEnd + 3;
+        continue;
+      }
+
+      // CDATA: kept as escaped text, which reads the same in HTML and XML
+      if (svg.substr(i, 9).toUpperCase() === '<![CDATA[') {
+        var dEnd = svg.indexOf(']]>', i + 9);
+        emit(svg.slice(i + 9, dEnd === -1 ? n : dEnd).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'));
+        i = dEnd === -1 ? n : dEnd + 3;
+        continue;
+      }
+
+      // DOCTYPE or other declaration: dropped. An internal subset can declare
+      // entities that expand to markup when the file is parsed as XML.
+      if (svg.charAt(i + 1) === '!') {
+        var gt = svg.indexOf('>', i);
+        var bracket = svg.indexOf('[', i);
+        if (bracket !== -1 && (gt === -1 || bracket < gt)) {
+          var subsetEnd = /\][\t\n\f\r ]*>/g;
+          subsetEnd.lastIndex = bracket;
+          var sm = subsetEnd.exec(svg);
+          if (skipName === null) flag(6);
+          i = sm ? sm.index + sm[0].length : n;
+        } else {
+          i = gt === -1 ? n : gt + 1;
+        }
+        continue;
+      }
+
+      // Processing instruction: only a leading XML declaration survives
+      if (svg.charAt(i + 1) === '?') {
+        var pEnd = svg.indexOf('?>', i + 2);
+        var pi = svg.slice(i, pEnd === -1 ? n : pEnd + 2);
+        i = pEnd === -1 ? n : pEnd + 2;
+        if (/^<\?xml[\t\n\r ][^<>]*\?>$/.test(pi) && out.trim() === '') emit(pi);
+        else if (skipName === null) flag(6);
+        continue;
+      }
+
+      // Anything but "<letter" or "</letter" is text
+      var next = svg.charAt(i + 1) === '/' ? svg.charAt(i + 2) : svg.charAt(i + 1);
+      if (!/[a-z]/i.test(next)) {
+        if (svg.charAt(i + 1) === '/') {
+          // "</" + non-letter is a bogus comment in HTML: drop it to the ">"
+          var bEnd = svg.indexOf('>', i);
+          i = bEnd === -1 ? n : bEnd + 1;
+        } else {
+          emit('&lt;');
+          i++;
+        }
+        continue;
+      }
+
+      var tag = readTag(svg, i);
+      if (!tag) break; // input ends inside a tag: a browser drops it too
+      i = tag.end;
+
+      var lowerName = tag.name.toLowerCase();
+      var localName = lowerName.slice(lowerName.lastIndexOf(':') + 1);
+
+      // Inside a dropped element: only track nesting of the same name
+      if (skipName !== null) {
+        if (lowerName === skipName) {
+          if (tag.isEnd) skipDepth--;
+          else if (!tag.selfClosing) skipDepth++;
+          if (skipDepth === 0) skipName = null;
+        }
+        continue;
+      }
+
+      var allowed = ELEMENT_NAME.test(tag.name)
+        && !SCRIPT_ELEMENTS[localName]
+        && localName !== 'foreignobject'
+        // A prefixed name is editor metadata (sodipodi:, inkscape:, rdf:)
+        && (lowerName.indexOf(':') !== -1 || SVG_ELEMENTS[lowerName] === true);
+
+      if (tag.isEnd) {
+        if (allowed) out += '</' + tag.name + '>';
+        continue; // a stray end tag for a dropped element goes silently
+      }
+
+      if (!allowed) {
+        if (SCRIPT_ELEMENTS[localName]) flag(0);
+        else if (localName === 'foreignobject') flag(1);
+        else flag(2);
+        if (!tag.selfClosing) { skipName = lowerName; skipDepth = 1; }
+        continue;
+      }
+
+      var attrs = cleanAttrs(localName, tag.attrs, flag);
+      out += '<' + tag.name + attrs.map(writeAttr).join('') + tag.tail + (tag.selfClosing ? '/>' : '>');
+    }
+
+    var removed = [];
+    SANITISE_LABELS.forEach(function (label, index) { if (found[index]) removed.push(label); });
+    return { output: out, removed: removed };
+  }
+
+  // Strip Active Content (scripts, event handlers, script URLs, foreignObject,
+  // non-SVG elements). Leaves <style>, CSS keyframes and SMIL <animate>
+  // untouched — declarative animation survives; only script vectors go.
+  function sanitiseSVG(svg) {
+    return runSanitise(svg).output;
+  }
+
+  // Report What the Sanitise Pass Would Remove (for caller warnings)
+  function sanitiseReport(svg) {
+    return runSanitise(svg).removed;
   }
 
   //
