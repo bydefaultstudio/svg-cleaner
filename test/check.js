@@ -123,6 +123,79 @@ assert(!out.includes('data:text/html'), 'sanitise removes data:text/html links')
 assert(out.includes('@keyframes spin'), 'sanitise keeps CSS keyframes');
 assert(out.includes('<animate'), 'sanitise keeps SMIL animation');
 
+// The regex pass this replaced missed every one of these. Each must lose its
+// script vector. (For 1.2.0 the same payloads, and more, were also loaded in
+// Chromium inline and as .svg files after sanitising; none ran.)
+const BYPASSES = [
+  ['unquoted handler', '<svg onload=alert(1)><path d="M0"/></svg>', /onload/i],
+  ['slash-separated handler', '<svg/onload=alert(1)>', /onload/i],
+  ['mixed-case handler', "<svg><path ONLOAD='alert(1)'/></svg>", /onload/i],
+  ['newline before =', '<svg><g onclick\n=alert(1)></g></svg>', /onclick/i],
+  ['unquoted javascript: link', '<svg><a href=javascript:alert(1)><rect/></a></svg>', /javascript/i],
+  ['entity-encoded scheme', '<svg><a href="&#x6A;avascript:alert(1)"><rect/></a></svg>', /avascript/i],
+  ['named-entity scheme', '<svg><a href="java&Tab;script&colon;alert(1)"><rect/></a></svg>', /script&colon/i],
+  ['SMIL set to javascript:', '<svg><a><set attributeName="href" to="javascript:alert(1)"/></a></svg>', /javascript/i],
+  ['SMIL values list', '<svg><a><animate attributeName="href" values="#;javascript:alert(1)"/></a></svg>', /javascript/i],
+  ['prefixed script', '<svg><x:script xmlns:x="http://www.w3.org/2000/svg">alert(1)</x:script></svg>', /alert/],
+  ['HTML breakout element', '<svg><p><img src=x onerror=alert(1)></p></svg>', /<img|<p/i],
+  ['handler hidden in a style element', '<svg><style><img src=x onerror=alert(1)></style></svg>', /onerror|<img/i],
+  ['XHTML namespace switch', '<svg><g xmlns="http://www.w3.org/1999/xhtml"><a href="#">x</a></g></svg>', /1999\/xhtml/],
+  ['DOCTYPE entity expansion', '<!DOCTYPE svg [<!ENTITY x "<script>alert(1)</script>">]><svg>&x;</svg>', /ENTITY|<script/],
+  ['data: document in <use>', '<svg><use href="data:image/svg+xml;base64,AAAA#x"/></svg>', /data:/],
+];
+BYPASSES.forEach(function (c) {
+  assert(!c[2].test(sanitiseSVG(c[1])), 'sanitise closes: ' + c[0]);
+  assert(sanitiseReport(c[1]).length > 0, 'report flags: ' + c[0]);
+});
+
+// Comment and attribute tricks that make HTML and XML disagree are written
+// back in a form both read the same way
+out = sanitiseSVG('<svg><!--><img src=x onerror=alert(1)>--></svg>');
+assert(!/<img/.test(out) && /^<svg><!--[^<>]*--><\/svg>$/.test(out), 'comment cannot end early in HTML');
+out = sanitiseSVG('<svg><text aria-label="</style><img src=x onerror=alert(1)>">x</text></svg>');
+assert(!/<\/style><img/.test(out) && out.includes('&lt;/style&gt;'), 'angle brackets escaped inside values');
+
+// Inline in a page, HTML parses whatever sits outside the root and inside
+// <title>/<desc> as HTML: <image name="cookie"> there shadows document.cookie
+out = sanitiseSVG('<svg><title><a href="#">t</a><image name="cookie"/></title></svg>');
+assert(out === '<svg><title></title></svg>', 'title and desc keep text only');
+assert(sanitiseReport('<svg><desc><style>body{}</style></desc></svg>').includes('elements inside title or desc'), 'report flags elements in desc');
+out = sanitiseSVG('<a name="cookie">x</a><svg><path d="M0"/></svg><image name="cookie"/>');
+assert(out === '<svg><path d="M0"/></svg>', 'nothing kept outside the one root svg');
+assert(sanitiseReport('<svg></svg><a>x</a>').includes('content outside the root svg'), 'report flags content after the root');
+assert(sanitiseSVG('<svg><title>Fish &amp; chips</title></svg>') === '<svg><title>Fish &amp; chips</title></svg>', 'title text kept');
+
+// data: URLs load documents; only an image may take one, as an image
+out = sanitiseSVG('<svg><a href="data:image/svg+xml,x"><rect/></a><image href="data:image/png;base64,AA"/></svg>');
+assert(!out.includes('svg+xml') && out.includes('data:image/png'), 'data: kept on image only');
+out = sanitiseSVG('<svg><set attributeName="onclick" to="x"/></svg>');
+assert(!/attributeName/.test(out), 'SMIL cannot target a handler');
+
+// XML well-formedness: bare & and form feeds
+out = sanitiseSVG('<svg>\f<g\fid="a"\f>a & b</g></svg>');
+assert(out === '<svg> <g id="a" >a &amp; b</g></svg>', 'bare & escaped, form feeds become spaces');
+
+// Many declarations stay linear (this was quadratic: 7s at 1.6MB)
+const started = Date.now();
+sanitiseSVG('<!a>'.repeat(400000));
+assert(Date.now() - started < 2000, 'declarations scan in linear time');
+out = sanitiseSVG('<svg><style><![CDATA[a > b { fill: red }]]></style></svg>');
+assert(out === '<svg><style>a &gt; b { fill: red }</style></svg>', 'CDATA becomes escaped text');
+
+// Ordinary exports pass through: nothing reported, formatting kept
+const EXPORT = '<?xml version="1.0" encoding="UTF-8"?>\n<!-- Generator: Adobe Illustrator -->\n'
+  + '<svg xmlns="http://www.w3.org/2000/svg" xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd" viewBox="0 0 10 10">\n'
+  + '  <sodipodi:namedview pagecolor="#fff"/>\n'
+  + "  <defs><linearGradient id='g'><stop offset='0'/></linearGradient></defs>\n"
+  + '  <a href="#top"><path class="st0" d="M0 0h10v10H0z"/></a>\n'
+  + '</svg>';
+assert.strictEqual(sanitiseSVG(EXPORT), EXPORT, 'a clean export passes through unchanged');
+assert.strictEqual(sanitiseReport(EXPORT).length, 0, 'a clean export reports nothing');
+out = sanitiseSVG('<svg><g data-motion><path d="M0"/></g></svg>');
+assert(out.includes('data-motion=""'), 'valueless attribute gets an empty value');
+assert(sanitiseSVG('<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "x.dtd"><svg/>') === '<svg/>', 'plain DOCTYPE dropped silently');
+assert(sanitiseReport('<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "x.dtd"><svg/>').length === 0, 'plain DOCTYPE not reported');
+
 // sanitise runs inside processSVG when enabled, not otherwise
 out = processSVG(HOSTILE, { sanitise: true });
 assert(!out.includes('<script'), 'processSVG sanitises when enabled');

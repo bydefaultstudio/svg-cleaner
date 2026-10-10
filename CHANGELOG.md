@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.2.0 — 2026-10-10
+
+- **Security: the sanitise pass reads tags instead of matching regexes.** The
+  regex pass missed unquoted handlers (`<svg onload=alert(1)>`), `/` as an
+  attribute separator (`<svg/onload=...>`), entity-encoded schemes
+  (`&#x6A;avascript:`, `java&Tab;script&colon;`), SMIL `<set>`/`<animate>`
+  animating a link into `javascript:`, prefixed `<x:script>`, HTML elements
+  that break out of SVG in a page, XHTML namespace switches and DOCTYPE entity
+  expansion. All are closed. The pass now keeps only SVG elements, one root
+  `<svg>` with nothing beside it, and only text in `<title>` and `<desc>` (HTML
+  parses both as HTML inline, which allowed DOM clobbering). It drops every
+  `on*` attribute, every value that decodes to a script URL and every `data:`
+  URL bar an image's source, and writes kept tags back in one canonical form
+  both parsers read alike: bare `&` escaped, form feeds turned to spaces.
+- `sanitiseReport()` can name six new removals: `non-SVG elements`,
+  `XHTML namespace declarations`, `DOCTYPE entity declarations and processing
+  instructions`, `malformed attributes`, `content outside the root svg` and
+  `elements inside title or desc`.
+- `<style>` and `style=` are kept, as before. Inline, an SVG's `<style>`
+  applies to the whole page; DESIGN.md says so now.
+- Output changes only where something was removed, or in form: a valueless
+  attribute gains `=""`, an unquoted value gains quotes, CDATA becomes
+  escaped text, and a comment loses any `<`, `>` or `--` inside it.
+
 ## 1.1.0 — 2026-07-23
 
 - New: `docs/` — the public web tool, a fully static page served by GitHub
