@@ -121,6 +121,8 @@
     'XHTML namespace declarations',
     'DOCTYPE entity declarations and processing instructions',
     'malformed attributes',
+    'content outside the root svg',
+    'elements inside title or desc',
   ];
 
   function toSet(list) {
@@ -184,6 +186,12 @@
   // several URLs, and <set to="javascript:..."> animates a link into one.
   var SCRIPT_URL = /(?:java|vb)script:|data:text\/html|data:(?:text|application)\/(?:x-)?(?:java|ecma)script/;
 
+  // Attributes that take a URL, so a data: value there loads a document
+  var URL_ATTRS = toSet(['href', 'src', 'to', 'from', 'by', 'values']);
+
+  // An "&" that does not start an entity: legal in HTML, fatal in XML
+  var BARE_AMP = /&(?!(?:#[0-9]+|#x[0-9a-f]+|[a-z][a-z0-9]*);)/gi;
+
   var ATTR_NAME = /^[a-z_][a-z0-9_.:-]*$/i;
   var ELEMENT_NAME = /^[a-z_][a-z0-9_.-]*(?::[a-z_][a-z0-9_.-]*)?$/i;
   var WHITESPACE = /[\t\n\f\r ]/;
@@ -245,10 +253,11 @@
   // Write an attribute back in canonical form: always quoted, and no "<" or
   // ">" left in the value for an HTML raw-text element to end early on.
   function writeAttr(attr) {
-    var sep = attr.sep === '' ? ' ' : attr.sep;
+    // A form feed separates attributes in HTML and is illegal in XML
+    var sep = attr.sep === '' ? ' ' : attr.sep.replace(/\f/g, ' ');
     if (!attr.hasValue) return sep + attr.name + '=""';
     var quote = attr.quote || '"';
-    var value = attr.value.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    var value = attr.value.replace(BARE_AMP, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     if (quote === '"') value = value.replace(/"/g, '&quot;');
     return sep + attr.name + '=' + quote + value + quote;
   }
@@ -275,8 +284,17 @@
         flag(5); return false;
       }
       if (SCRIPT_URL.test(value)) { flag(4); return false; }
-      // <use> pulls a whole document in; a data: one has carried script before
-      if (localName === 'use' && local === 'href' && value.indexOf('data:') === 0) { flag(4); return false; }
+      // A data: URL is a whole document (a link, a <use>, a SMIL value can
+      // all load one). Only an image's own source may be one, and only an
+      // image, which the browser renders with scripts off.
+      if (URL_ATTRS[local] && value.indexOf('data:') !== -1
+        && !((localName === 'image' || localName === 'feimage') && local === 'href' && value.indexOf('data:image/') === 0)) {
+        flag(4); return false;
+      }
+      // Browsers refuse to animate a handler today; do not rely on it
+      if (local === 'attributename' && value.slice(value.lastIndexOf(':') + 1).indexOf('on') === 0) {
+        flag(3); return false;
+      }
       return true;
     });
   }
@@ -293,18 +311,42 @@
     var skipName = null; // lowercase name of an element being dropped whole
     var skipDepth = 0;
 
+    // One root <svg>, nothing beside it. Inline in a page, anything outside
+    // the root is parsed as HTML, so an <a> or <image> there becomes a live
+    // HTML element (DOM clobbering: <image name="cookie"> shadows
+    // document.cookie). Same for <title> and <desc>: HTML parses their
+    // children as HTML, so they keep text only.
+    var root = 'before'; // 'before' | 'inside' | 'after'
+    var svgDepth = 0;
+    var textOnlyDepth = 0; // open <title>/<desc> elements
+
     function emit(text) { if (skipName === null) out += text; }
+
+    function emitText(text) {
+      if (skipName !== null || text === '') return;
+      if (root !== 'inside') {
+        if (/\S/.test(text)) flag(8);
+        else out += text; // whitespace, such as a file's final newline, is harmless
+        return;
+      }
+      // A form feed is whitespace in HTML and illegal anywhere in XML
+      out += text.replace(BARE_AMP, '&amp;').replace(/\f/g, ' ');
+    }
+
+    function skip(tag, lowerName) {
+      if (!tag.selfClosing) { skipName = lowerName; skipDepth = 1; }
+    }
 
     while (i < n) {
       var lt = svg.indexOf('<', i);
-      if (lt === -1) { emit(svg.slice(i)); break; }
-      emit(svg.slice(i, lt));
+      if (lt === -1) { emitText(svg.slice(i)); break; }
+      emitText(svg.slice(i, lt));
       i = lt;
 
       // Comment
       if (svg.substr(i, 4) === '<!--') {
         var cEnd = svg.indexOf('-->', i + 4);
-        emit(writeComment(svg.slice(i + 4, cEnd === -1 ? n : cEnd)));
+        if (root !== 'after') emit(writeComment(svg.slice(i + 4, cEnd === -1 ? n : cEnd)));
         i = cEnd === -1 ? n : cEnd + 3;
         continue;
       }
@@ -312,7 +354,9 @@
       // CDATA: kept as escaped text, which reads the same in HTML and XML
       if (svg.substr(i, 9).toUpperCase() === '<![CDATA[') {
         var dEnd = svg.indexOf(']]>', i + 9);
-        emit(svg.slice(i + 9, dEnd === -1 ? n : dEnd).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'));
+        var cdata = svg.slice(i + 9, dEnd === -1 ? n : dEnd);
+        if (root === 'inside') emit(cdata.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'));
+        else if (skipName === null && /\S/.test(cdata)) flag(8);
         i = dEnd === -1 ? n : dEnd + 3;
         continue;
       }
@@ -321,8 +365,11 @@
       // entities that expand to markup when the file is parsed as XML.
       if (svg.charAt(i + 1) === '!') {
         var gt = svg.indexOf('>', i);
-        var bracket = svg.indexOf('[', i);
-        if (bracket !== -1 && (gt === -1 || bracket < gt)) {
+        // Look for "[" only up to the ">": a search to the end of the input
+        // for every declaration is quadratic on "<!a><!a>..."
+        var bracket = svg.slice(i, gt === -1 ? n : gt).indexOf('[');
+        if (bracket !== -1) bracket += i;
+        if (bracket !== -1) {
           var subsetEnd = /\][\t\n\f\r ]*>/g;
           subsetEnd.lastIndex = bracket;
           var sm = subsetEnd.exec(svg);
@@ -339,7 +386,7 @@
         var pEnd = svg.indexOf('?>', i + 2);
         var pi = svg.slice(i, pEnd === -1 ? n : pEnd + 2);
         i = pEnd === -1 ? n : pEnd + 2;
-        if (/^<\?xml[\t\n\r ][^<>]*\?>$/.test(pi) && out.trim() === '') emit(pi);
+        if (/^<\?xml[\t\n\r ][^<>]*\?>$/.test(pi) && root === 'before' && out.trim() === '') emit(pi);
         else if (skipName === null) flag(6);
         continue;
       }
@@ -352,7 +399,8 @@
           var bEnd = svg.indexOf('>', i);
           i = bEnd === -1 ? n : bEnd + 1;
         } else {
-          emit('&lt;');
+          if (root === 'inside') emit('&lt;');
+          else emitText('<');
           i++;
         }
         continue;
@@ -381,21 +429,40 @@
         // A prefixed name is editor metadata (sodipodi:, inkscape:, rdf:)
         && (lowerName.indexOf(':') !== -1 || SVG_ELEMENTS[lowerName] === true);
 
+      var isTextOnly = lowerName === 'title' || lowerName === 'desc';
+
       if (tag.isEnd) {
-        if (allowed) out += '</' + tag.name + '>';
-        continue; // a stray end tag for a dropped element goes silently
+        // A stray end tag, or one for a dropped element, goes silently
+        if (root !== 'inside' || !allowed) continue;
+        if (textOnlyDepth > 0) {
+          if (!isTextOnly) continue;
+          textOnlyDepth--;
+        }
+        out += '</' + tag.name + '>';
+        if (lowerName === 'svg' && --svgDepth === 0) root = 'after';
+        continue;
       }
 
       if (!allowed) {
         if (SCRIPT_ELEMENTS[localName]) flag(0);
         else if (localName === 'foreignobject') flag(1);
         else flag(2);
-        if (!tag.selfClosing) { skipName = lowerName; skipDepth = 1; }
+        skip(tag, lowerName);
         continue;
       }
 
+      if (root !== 'inside' && !(root === 'before' && lowerName === 'svg')) { flag(8); skip(tag, lowerName); continue; }
+      if (textOnlyDepth > 0) { flag(9); skip(tag, lowerName); continue; }
+
       var attrs = cleanAttrs(localName, tag.attrs, flag);
-      out += '<' + tag.name + attrs.map(writeAttr).join('') + tag.tail + (tag.selfClosing ? '/>' : '>');
+      out += '<' + tag.name + attrs.map(writeAttr).join('') + tag.tail.replace(/\f/g, ' ') + (tag.selfClosing ? '/>' : '>');
+
+      if (lowerName === 'svg') {
+        root = 'inside';
+        if (tag.selfClosing) { if (svgDepth === 0) root = 'after'; } else svgDepth++;
+      } else if (isTextOnly && !tag.selfClosing) {
+        textOnlyDepth++;
+      }
     }
 
     var removed = [];

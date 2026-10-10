@@ -69,8 +69,13 @@ reads tags one at a time with HTML's tokenizer rules and:
 - keeps only SVG elements, so HTML that breaks out of SVG parsing in a page
   (`<img>`, `<p>`, `<font>`) cannot survive, and `<script>` and
   `<foreignObject>` go with their content, prefixed or not;
-- drops every `on*` attribute, and any value that decodes to a script URL
-  (`javascript:`, `vbscript:`, `data:text/html`), anywhere in the value;
+- keeps one root `<svg>` and nothing beside it, and only text inside
+  `<title>` and `<desc>`. Inline in a page, HTML parses both places as HTML,
+  so an `<a>` or `<image name="cookie">` there would become a live HTML
+  element and could shadow `document.cookie` (DOM clobbering);
+- drops every `on*` attribute, any value that decodes to a script URL
+  (`javascript:`, `vbscript:`, `data:text/html`) anywhere in the value, and
+  any `data:` URL except an image's own source;
 - drops XHTML namespace declarations, DOCTYPE internal subsets and
   processing instructions other than the leading XML declaration;
 - writes every kept tag back in one canonical form: quoted values, `<` and
@@ -80,6 +85,12 @@ reads tags one at a time with HTML's tokenizer rules and:
 
 A clean export comes back byte for byte, apart from a valueless attribute
 gaining `=""`.
+
+One thing it leaves alone on purpose: `<style>` and `style=`. Designers need
+them, and nothing in CSS runs script in current browsers. But a `<style>` in
+an inline SVG applies to the whole page, so CSS from an untrusted SVG can
+restyle or overlay its host. Embed untrusted SVG through `<img>` when that
+matters.
 
 It is still not a full XML parser, so it is one layer of defence, not the
 only one: anything security-critical must also rely on browser-enforced

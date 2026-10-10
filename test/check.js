@@ -152,8 +152,33 @@ BYPASSES.forEach(function (c) {
 // back in a form both read the same way
 out = sanitiseSVG('<svg><!--><img src=x onerror=alert(1)>--></svg>');
 assert(!/<img/.test(out) && /^<svg><!--[^<>]*--><\/svg>$/.test(out), 'comment cannot end early in HTML');
-out = sanitiseSVG('<svg><title><a title="</title><img src=x onerror=alert(1)>"></a></title></svg>');
-assert(!/<\/title><img/.test(out) && out.includes('&lt;/title&gt;'), 'angle brackets escaped inside values');
+out = sanitiseSVG('<svg><text aria-label="</style><img src=x onerror=alert(1)>">x</text></svg>');
+assert(!/<\/style><img/.test(out) && out.includes('&lt;/style&gt;'), 'angle brackets escaped inside values');
+
+// Inline in a page, HTML parses whatever sits outside the root and inside
+// <title>/<desc> as HTML: <image name="cookie"> there shadows document.cookie
+out = sanitiseSVG('<svg><title><a href="#">t</a><image name="cookie"/></title></svg>');
+assert(out === '<svg><title></title></svg>', 'title and desc keep text only');
+assert(sanitiseReport('<svg><desc><style>body{}</style></desc></svg>').includes('elements inside title or desc'), 'report flags elements in desc');
+out = sanitiseSVG('<a name="cookie">x</a><svg><path d="M0"/></svg><image name="cookie"/>');
+assert(out === '<svg><path d="M0"/></svg>', 'nothing kept outside the one root svg');
+assert(sanitiseReport('<svg></svg><a>x</a>').includes('content outside the root svg'), 'report flags content after the root');
+assert(sanitiseSVG('<svg><title>Fish &amp; chips</title></svg>') === '<svg><title>Fish &amp; chips</title></svg>', 'title text kept');
+
+// data: URLs load documents; only an image may take one, as an image
+out = sanitiseSVG('<svg><a href="data:image/svg+xml,x"><rect/></a><image href="data:image/png;base64,AA"/></svg>');
+assert(!out.includes('svg+xml') && out.includes('data:image/png'), 'data: kept on image only');
+out = sanitiseSVG('<svg><set attributeName="onclick" to="x"/></svg>');
+assert(!/attributeName/.test(out), 'SMIL cannot target a handler');
+
+// XML well-formedness: bare & and form feeds
+out = sanitiseSVG('<svg>\f<g\fid="a"\f>a & b</g></svg>');
+assert(out === '<svg> <g id="a" >a &amp; b</g></svg>', 'bare & escaped, form feeds become spaces');
+
+// Many declarations stay linear (this was quadratic: 7s at 1.6MB)
+const started = Date.now();
+sanitiseSVG('<!a>'.repeat(400000));
+assert(Date.now() - started < 2000, 'declarations scan in linear time');
 out = sanitiseSVG('<svg><style><![CDATA[a > b { fill: red }]]></style></svg>');
 assert(out === '<svg><style>a &gt; b { fill: red }</style></svg>', 'CDATA becomes escaped text');
 
