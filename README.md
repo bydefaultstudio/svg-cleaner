@@ -1,4 +1,9 @@
-# SVG Cleaner
+<h1>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/images/readme-header_dark.svg">
+  <img alt="svg-cleaner" src="assets/images/readme-header_light.svg" height="48">
+</picture>
+</h1>
 
 Clean and prepare SVGs for inline use, icon systems, standalone files and CSS. One dependency-free engine, consumed two ways: a Node CLI and a browser global.
 
